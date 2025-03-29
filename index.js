@@ -6,7 +6,7 @@ require('dotenv').config();
 console.log('接続先ホスト:', process.env.DB_HOST);
 
 const app = express();
-const port = 4000;
+const port = process.env.PORT || 4000;
 
 app.use(cors());
 app.use(express.json());
