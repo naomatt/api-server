@@ -172,44 +172,47 @@ app.post('/jyoukyou', async (req, res) => {
 // typeを取得
 app.get('/type', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM type ORDER BY atsukai_order');
+    const result = await pool.query('SELECT * FROM type ORDER BY display_order ASC');
     res.json(result.rows);
   } catch (err) {
     console.error('type取得エラー:', err);
     res.status(500).json({ error: 'type取得失敗' })
   }
 });
+// typeを登録
 app.post('/type', async (req, res) => {
   const { name, atsukai_order } = req.body;
 
   try {
+    // 最大 display_order を取得
+    const maxResult = await pool.query('SELECT MAX(display_order) as max_order FROM type WHERE atsukai_order = $1', [atsukai_order]);
+    const nextOrder = (maxResult.rows[0].max_order || 0) + 1;
+
     const result = await pool.query(
-      'INSERT INTO type (name, atsukai_order) VALUES ($1, $2) RETURNING *',
-      [name, atsukai_order]
+      'INSERT INTO type (name, atsukai_order, display_order) VALUES ($1, $2, $3) RETURNING *',
+      [name, atsukai_order, nextOrder]
     );
+
     res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('type登録エラー:', error);
     res.status(500).json({ error: error.message });
   }
 });
-
-
 // type 更新
 app.put('/type/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, atsukai_order } = req.body;
+  const { name, atsukai_order, display_order } = req.body;
   try {
     const result = await pool.query(
-      'UPDATE type SET name = $1, atsukai_order = $2 WHERE id = $3 RETURNING *',
-      [name, atsukai_order, id]
+      'UPDATE type SET name = $1, atsukai_order = $2, display_order = $3 WHERE id = $4 RETURNING *',
+      [name, atsukai_order, display_order, id]
     );
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: '更新失敗' });
   }
 });
-
 // type 削除
 app.delete('/type/:id', async (req, res) => {
   const { id } = req.params;
@@ -223,6 +226,130 @@ app.delete('/type/:id', async (req, res) => {
     res.status(500).json({ error: '削除失敗' });
   }
 });
+// 順序入れ替えAPI
+app.put('/type/reorder', async (req, res) => {
+  const { id1, id2 } = req.body;
+
+  try {
+    const client = await pool.connect();
+    await client.query('BEGIN');
+
+    const [res1, res2] = await Promise.all([
+      client.query('SELECT display_order FROM type WHERE id = $1', [id1]),
+      client.query('SELECT display_order FROM type WHERE id = $1', [id2]),
+    ]);
+
+    const order1 = res1.rows[0].display_order;
+    const order2 = res2.rows[0].display_order;
+
+    await client.query('UPDATE type SET display_order = $1 WHERE id = $2', [order2, id1]);
+    await client.query('UPDATE type SET display_order = $1 WHERE id = $2', [order1, id2]);
+
+    await client.query('COMMIT');
+    res.json({ message: 'typeの順序を入れ替えました' });
+  } catch (error) {
+    console.error('並び替えエラー:', error);
+    res.status(500).json({ error: '順序の入れ替えに失敗しました' });
+  }
+});
+
+// memoのAPI
+// memoの取得
+// GET /memo?type_id=xx&atsukai_id=yy
+app.get('/memo', async (req, res) => {
+  const { type_id, atsukai_id } = req.query;
+  try {
+    const result = await pool.query(
+      'SELECT * FROM memo WHERE type_id = $1 AND atsukai_id = $2',
+      [type_id, atsukai_id]
+    );
+    res.json(result.rows[0] || null);
+  } catch (err) {
+    console.error('memo取得エラー:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+// すべてのmemoを取得（必要に応じてフィルター）
+app.get('/memo/list', async (req, res) => {
+  const { atsukai_id, type_id } = req.query;
+  try {
+    let query = 'SELECT * FROM memo';
+    const params = [];
+
+    if (atsukai_id || type_id) {
+      const conditions = [];
+      if (atsukai_id) {
+        conditions.push('atsukai_id = $' + (params.length + 1));
+        params.push(atsukai_id);
+      }
+      if (type_id) {
+        conditions.push('type_id = $' + (params.length + 1));
+        params.push(type_id);
+      }
+      query += ' WHERE ' + conditions.join(' AND ');
+    }
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('memo list 取得エラー:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+
+// memoの登録
+app.post('/memo', async (req, res) => {
+  const { type_id, atsukai_id, content } = req.body;
+  try {
+    const result = await pool.query(
+      'INSERT INTO memo (type_id, atsukai_id, content) VALUES ($1, $2, $3) RETURNING *',
+      [type_id, atsukai_id, content]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('memoの登録エラー:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// memoの更新
+app.put('/memo/:id', async(req, res) => {
+  const { id } = req.params;
+  const { content } = req.body;
+  try {
+    const result = await pool.query(
+      'UPDATE memo SET content = $1 WHERE id = $2 RETURNING *',
+      [content, id]
+    );
+    res.json(result.rows[0]);
+  } catch(err) {
+    console.error('memo更新エラー:', err);
+    res.status(500).json({error: err.message});
+  }
+});
+// memoの削除
+app.delete('/memo/:id', async(req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      'DELETE FROM memo WHERE id = $1 RETURNING *',
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'メモが見つかりませんでした' });
+    }
+    res.json({
+      message: 'メモの削除が完了しました。',
+      delete: result.rows[0],
+    });
+  } catch(err) {
+    console.error('メモ削除エラー:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 // 以下、kiji1とkiji2のAPI
 // kiji1のAPI  ---------------------------------------------------------------
